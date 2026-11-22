@@ -1,0 +1,31 @@
+[package]
+name = "inodetree"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Fast Linux disk space analyzer"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+rayon = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Sizes and counters are deliberately narrowed to the compact arena field types
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
