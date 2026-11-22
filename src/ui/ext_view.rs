@@ -21,6 +21,8 @@ pub struct ExtView<'a> {
 /// Returns the extension the user clicked this frame, if any.
 pub fn show(ui: &mut Ui, view: &ExtView<'_>) -> Option<u16> {
     let mut clicked = None;
+    // Selectable labels swallow the click, so pressing on an extension name would do nothing
+    ui.style_mut().interaction.selectable_labels = false;
     TableBuilder::new(ui)
         .striped(true)
         .sense(Sense::click())

@@ -28,6 +28,8 @@ pub(super) struct Pending {
 
 pub fn show(ui: &mut Ui, model: &mut TreeModel, view: &TreeView<'_>) -> Option<RowAction> {
     let mut pending = Pending::default();
+    // Selectable labels swallow the click, so pressing on a size or date would not select the row
+    ui.style_mut().interaction.selectable_labels = false;
     let scroll_row = model.scroll_to.take().and_then(|id| model.row_index(id));
     let (rows, expanded, selected) = (&model.rows, &model.expanded, model.selected);
     let mut table = TableBuilder::new(ui)
