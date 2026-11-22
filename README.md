@@ -24,9 +24,6 @@ a size-sorted directory tree, a per-extension breakdown, and an interactive tree
 - Allocated size (disk usage) or logical size (file length), switchable at any time.
 - A `--headless` mode that prints a text report, useful for scripts and benchmarks.
 
-Not implemented yet: the "turbo" mode that reads ext4 and NTFS metadata directly from the
-block device.
-
 ## Install
 
 Pre-built packages are attached to each
