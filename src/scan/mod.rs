@@ -1,5 +1,6 @@
 //! Filesystem scanning: shared configuration, progress counters and result types.
 
+pub mod job;
 pub mod sys;
 pub mod vfs;
 

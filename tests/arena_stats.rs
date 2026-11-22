@@ -110,3 +110,37 @@ fn leaf_nodes_have_no_children() {
     let big = arena.children(ROOT).next().unwrap();
     assert_eq!(arena.nodes[big as usize].first_child, NO_NODE);
 }
+
+#[test]
+fn siblings_follow_the_chosen_size_mode() {
+    let mut arena = Arena::with_root("/data", 0, 0, 0);
+    let mut batch = ChildBatch::default();
+    // "sparse" is large logically but takes no disk space, "dense" is the opposite
+    for (name, logical_size, allocated_size) in [("dense", 10, 4096), ("sparse", 1000, 0)] {
+        let name_start = batch.names.len();
+        batch.names.push_str(name);
+        batch.entries.push(NewNode {
+            name_start,
+            name_end: batch.names.len(),
+            kind: NodeKind::File,
+            logical_size,
+            allocated_size,
+            mtime_secs: 0,
+            is_hardlink_duplicate: false,
+        });
+    }
+    arena.append_children(ROOT, &batch);
+    arena.aggregate();
+    let order = |arena: &Arena| {
+        arena
+            .children(ROOT)
+            .map(|id| arena.name(id).to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(&arena), ["dense", "sparse"]);
+
+    arena.sort_all_children(true);
+    assert_eq!(order(&arena), ["sparse", "dense"]);
+    arena.sort_all_children(false);
+    assert_eq!(order(&arena), ["dense", "sparse"]);
+}

@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 use clap::Parser;
 use inodetree::arena::{Arena, NodeId, ROOT};
+use inodetree::format::format_size;
 use inodetree::scan::{ScanConfig, ScanResult, vfs};
 use inodetree::stats;
 
@@ -26,8 +27,21 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let Some(path) = cli.path.as_ref().filter(|_| cli.headless) else {
-        eprintln!("The GUI is not implemented yet: run `inodetree --headless <PATH>`");
+    if cli.headless {
+        return run_headless(&cli);
+    }
+    match inodetree::ui::run(cli.path) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Cannot start the GUI: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_headless(cli: &Cli) -> ExitCode {
+    let Some(path) = cli.path.as_ref() else {
+        eprintln!("--headless requires a PATH to scan");
         return ExitCode::FAILURE;
     };
     let config = ScanConfig::new(path);
@@ -40,7 +54,7 @@ fn main() -> ExitCode {
     };
     let unreadable_dirs = config.progress.unreadable_dirs.load(Relaxed);
     // A closed pipe (for example `| head`) is a normal way to stop reading, not a failure
-    match print_report(&mut io::stdout().lock(), &result, &cli, unreadable_dirs) {
+    match print_report(&mut io::stdout().lock(), &result, cli, unreadable_dirs) {
         Err(error) if error.kind() != io::ErrorKind::BrokenPipe => {
             eprintln!("Cannot write report: {error}");
             ExitCode::FAILURE
@@ -113,19 +127,4 @@ fn print_extensions(out: &mut impl Write, arena: &Arena, top: usize) -> io::Resu
         writeln!(out, "{size:>12}  {:>9} files  {label}", entry.file_count)?;
     }
     Ok(())
-}
-
-fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
 }

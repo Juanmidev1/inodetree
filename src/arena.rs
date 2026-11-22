@@ -35,6 +35,17 @@ pub struct Node {
     pub mtime_secs: i64,
 }
 
+impl Node {
+    #[must_use]
+    pub fn size(&self, use_logical: bool) -> u64 {
+        if use_logical {
+            self.logical_size
+        } else {
+            self.allocated_size
+        }
+    }
+}
+
 /// Append-only UTF-8 names. Offsets are `u32`, so the pool is capped at 4 GiB.
 #[derive(Debug, Default)]
 pub struct StringPool {
@@ -201,10 +212,11 @@ impl Arena {
             parent.dir_count += child.dir_count + u32::from(child.kind == NodeKind::Directory);
             parent.mtime_secs = parent.mtime_secs.max(child.mtime_secs);
         }
-        self.sort_all_children();
+        self.sort_all_children(false);
     }
 
-    fn sort_all_children(&mut self) {
+    /// Orders every sibling chain by descending size in the chosen mode.
+    pub fn sort_all_children(&mut self, use_logical: bool) {
         let mut scratch: Vec<NodeId> = Vec::new();
         for id in 0..self.nodes.len() as NodeId {
             scratch.clear();
@@ -212,8 +224,9 @@ impl Arena {
             if scratch.len() < 2 {
                 continue;
             }
-            scratch
-                .sort_by_key(|&child| std::cmp::Reverse(self.nodes[child as usize].allocated_size));
+            scratch.sort_by_key(|&child| {
+                std::cmp::Reverse(self.nodes[child as usize].size(use_logical))
+            });
             self.nodes[id as usize].first_child = scratch[0];
             for pair in scratch.windows(2) {
                 self.nodes[pair[0] as usize].next_sibling = pair[1];

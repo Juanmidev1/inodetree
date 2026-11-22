@@ -90,7 +90,10 @@ fn filesystem_space(path: &str) -> io::Result<(u64, u64)> {
     // SAFETY: `statvfs` returned 0, so it fully initialized the struct
     let stats = unsafe { stats.assume_init() };
     let block_size = stats.f_frsize;
-    Ok((stats.f_blocks * block_size, stats.f_bavail * block_size))
+    Ok((
+        stats.f_blocks.saturating_mul(block_size),
+        stats.f_bavail.saturating_mul(block_size),
+    ))
 }
 
 #[cfg(test)]
