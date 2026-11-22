@@ -6,7 +6,6 @@ rust-version = "1.85"
 description = "Fast Linux disk space analyzer"
 license = "MIT"
 repository = "https://github.com/Juanmidev1/inodetree"
-homepage = "https://github.com/Juanmidev1/inodetree"
 readme = "README.md"
 
 [dependencies]

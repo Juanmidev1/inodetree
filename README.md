@@ -7,6 +7,8 @@ inodetree scans a directory tree with a parallel `getdents64` + `statx` walker, 
 result in a compact arena, and shows it in a native GUI with three views of the same data:
 a size-sorted directory tree, a per-extension breakdown, and an interactive treemap.
 
+![inodetree scanning a sample home directory: the directory tree, the extension table and the treemap, with search and the context menu](docs/demo.gif)
+
 ## Features
 
 - Multi-threaded scan that stays on one filesystem and counts hard links once, so totals
