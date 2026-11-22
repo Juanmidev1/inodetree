@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=inodetree
+GenericName=Disk Space Analyzer
+Comment=Find out what fills your disk
+Exec=inodetree %f
+Icon=inodetree
+Terminal=false
+Categories=System;Filesystem;
+Keywords=disk;space;usage;analyzer;treemap;
+StartupWMClass=inodetree
