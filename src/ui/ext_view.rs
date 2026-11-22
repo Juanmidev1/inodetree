@@ -3,6 +3,7 @@
 use eframe::egui::{self, Color32, Layout, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
 
+use super::tree_cells::right_aligned;
 use crate::extensions::ExtensionTable;
 use crate::format::format_size;
 use crate::stats::ExtensionStats;
@@ -71,10 +72,4 @@ fn paint_cells(row: &mut egui_extras::TableRow<'_, '_>, view: &ExtView<'_>, entr
     row.col(|ui| right_aligned(ui, &format_size(entry.allocated_size)));
     row.col(|ui| right_aligned(ui, &format!("{percent:.1} %")));
     row.col(|ui| right_aligned(ui, &entry.file_count.to_string()));
-}
-
-fn right_aligned(ui: &mut Ui, text: &str) {
-    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.label(text);
-    });
 }

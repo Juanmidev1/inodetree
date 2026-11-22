@@ -1,10 +1,14 @@
 //! Native egui shell. Everything below `ui` depends on a GUI toolkit; the core engine does not.
 
 mod app;
+mod background;
+mod context_menu;
 mod ext_view;
 mod palette;
+mod panels;
 mod session;
 mod toolbar;
+mod tree_cells;
 mod tree_model;
 mod tree_view;
 
