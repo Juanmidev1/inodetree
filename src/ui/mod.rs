@@ -2,6 +2,7 @@
 
 mod app;
 mod background;
+mod breadcrumb;
 mod context_menu;
 mod ext_view;
 mod palette;
@@ -11,6 +12,9 @@ mod toolbar;
 mod tree_cells;
 mod tree_model;
 mod tree_view;
+mod treemap;
+mod treemap_labels;
+mod treemap_mesh;
 
 use std::path::PathBuf;
 

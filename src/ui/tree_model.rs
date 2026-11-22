@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use crate::arena::{Arena, NodeId, NodeKind, ROOT};
+use crate::arena::{Arena, NO_NODE, NodeId, NodeKind, ROOT};
+use crate::filter::FilterMask;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Row {
@@ -15,6 +16,12 @@ pub struct TreeModel {
     pub expanded: HashSet<NodeId>,
     pub rows: Vec<Row>,
     pub selected: Option<NodeId>,
+    /// Row to bring into view on the next frame, then cleared by the table
+    pub scroll_to: Option<NodeId>,
+    /// Active search result: rows are limited to matches and the folders leading to them
+    pub filter: Option<FilterMask>,
+    // Expansion the user had before searching, restored when the search is cleared
+    saved_expanded: Option<HashSet<NodeId>>,
 }
 
 impl TreeModel {
@@ -35,7 +42,13 @@ impl TreeModel {
             if self.expanded.contains(&row.id) {
                 let children: Vec<NodeId> = arena
                     .children(row.id)
-                    .filter(|&child| !arena.nodes[child as usize].is_deleted)
+                    .filter(|&child| {
+                        !arena.nodes[child as usize].is_deleted
+                            && self
+                                .filter
+                                .as_ref()
+                                .is_none_or(|mask| mask.is_visible(child))
+                    })
                     .collect();
                 // Pushed in reverse so the largest child is popped first
                 stack.extend(children.into_iter().rev().map(|id| Row {
@@ -50,6 +63,45 @@ impl TreeModel {
         {
             self.selected = None;
         }
+    }
+
+    /// Applies or clears a search result. While a search is active every folder that leads to a
+    /// match is open, so results are visible without clicking through the tree.
+    pub fn set_filter(&mut self, arena: &Arena, mask: Option<FilterMask>) {
+        match (&self.filter, &mask) {
+            (None, Some(_)) => self.saved_expanded = Some(std::mem::take(&mut self.expanded)),
+            (Some(_), None) => {
+                if let Some(saved) = self.saved_expanded.take() {
+                    self.expanded = saved;
+                }
+            }
+            _ => {}
+        }
+        if let Some(mask) = &mask {
+            self.expanded = (0..arena.nodes.len() as NodeId)
+                .filter(|&id| mask.has_match_below(id))
+                .collect();
+            self.expanded.insert(ROOT);
+        }
+        self.filter = mask;
+        self.rebuild(arena);
+    }
+
+    /// Selects `id`, expands its ancestors and asks the table to scroll to it.
+    pub fn select_and_reveal(&mut self, arena: &Arena, id: NodeId) {
+        let mut ancestor = arena.nodes[id as usize].parent;
+        while ancestor != NO_NODE {
+            self.expanded.insert(ancestor);
+            ancestor = arena.nodes[ancestor as usize].parent;
+        }
+        self.selected = Some(id);
+        self.scroll_to = Some(id);
+        self.rebuild(arena);
+    }
+
+    #[must_use]
+    pub fn row_index(&self, id: NodeId) -> Option<usize> {
+        self.rows.iter().position(|row| row.id == id)
     }
 
     pub fn toggle(&mut self, arena: &Arena, id: NodeId) {
@@ -153,5 +205,35 @@ mod tests {
         model.rebuild(&arena);
         assert_eq!(names(&model, &arena), ["/r", "docs"]);
         assert_eq!(model.selected, None);
+    }
+
+    #[test]
+    fn select_and_reveal_expands_ancestors_and_targets_the_row() {
+        let (arena, docs) = sample();
+        let mut model = TreeModel::default();
+        model.reset(&arena);
+        model.select_and_reveal(&arena, docs + 3);
+        assert!(model.expanded.contains(&docs));
+        assert_eq!(model.selected, Some(docs + 3));
+        assert_eq!(model.scroll_to, Some(docs + 3));
+        assert_eq!(model.row_index(docs + 3), Some(3));
+        assert_eq!(model.row_index(999), None);
+    }
+
+    #[test]
+    fn a_filter_limits_rows_opens_matches_and_restores_expansion_when_cleared() {
+        use crate::filter::NameFilter;
+        let (arena, docs) = sample();
+        let mut model = TreeModel::default();
+        model.reset(&arena);
+
+        let mask = FilterMask::build(&arena, &NameFilter::parse("a").unwrap());
+        model.set_filter(&arena, Some(mask));
+        assert_eq!(names(&model, &arena), ["/r", "docs", "a"]);
+        assert!(model.expanded.contains(&docs));
+
+        model.set_filter(&arena, None);
+        assert_eq!(names(&model, &arena), ["/r", "big", "docs"]);
+        assert!(!model.expanded.contains(&docs));
     }
 }

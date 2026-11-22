@@ -28,8 +28,9 @@ pub(super) struct Pending {
 
 pub fn show(ui: &mut Ui, model: &mut TreeModel, view: &TreeView<'_>) -> Option<RowAction> {
     let mut pending = Pending::default();
+    let scroll_row = model.scroll_to.take().and_then(|id| model.row_index(id));
     let (rows, expanded, selected) = (&model.rows, &model.expanded, model.selected);
-    TableBuilder::new(ui)
+    let mut table = TableBuilder::new(ui)
         .striped(true)
         .resizable(true)
         .sense(Sense::click())
@@ -41,7 +42,11 @@ pub fn show(ui: &mut Ui, model: &mut TreeModel, view: &TreeView<'_>) -> Option<R
         .column(Column::initial(70.0))
         .column(Column::initial(70.0))
         .column(Column::initial(70.0))
-        .column(Column::remainder().at_least(110.0))
+        .column(Column::remainder().at_least(110.0));
+    if let Some(row) = scroll_row {
+        table = table.scroll_to_row(row, Some(Align::Center));
+    }
+    table
         .header(ROW_HEIGHT, |mut header| {
             for title in [
                 "Name",

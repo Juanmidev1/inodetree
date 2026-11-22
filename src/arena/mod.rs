@@ -150,6 +150,29 @@ impl Arena {
         path
     }
 
+    /// Chain of ids from the root down to `id`, inclusive.
+    #[must_use]
+    pub fn ancestry(&self, id: NodeId) -> Vec<NodeId> {
+        let mut chain = Vec::new();
+        let mut current = id;
+        while current != NO_NODE {
+            chain.push(current);
+            current = self.nodes[current as usize].parent;
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// `id` itself if alive, otherwise its closest ancestor that was not deleted.
+    #[must_use]
+    pub fn nearest_live(&self, id: NodeId) -> NodeId {
+        self.ancestry(id)
+            .into_iter()
+            .rev()
+            .find(|&candidate| !self.nodes[candidate as usize].is_deleted)
+            .unwrap_or(ROOT)
+    }
+
     pub fn children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         let mut next = self.nodes[id as usize].first_child;
         std::iter::from_fn(move || {

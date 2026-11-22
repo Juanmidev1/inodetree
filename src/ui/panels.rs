@@ -7,8 +7,10 @@ use eframe::egui::{self, Color32};
 use super::app::App;
 use super::context_menu::RowAction;
 use super::ext_view::{self, ExtView};
+use super::session::Session;
 use super::toolbar::{self, ToolbarEvent, ToolbarState};
 use super::tree_view::{self, TreeView};
+use super::treemap::{self, TreemapEvent, TreemapView};
 use crate::actions::DeleteMode;
 use crate::format::{format_count, format_size};
 
@@ -19,6 +21,8 @@ impl App {
         let was_logical = self.use_logical;
         let mut state = ToolbarState {
             path_input: &mut self.path_input,
+            filter_input: &mut self.filter_input,
+            match_count: self.session.as_ref().and_then(Session::match_count),
             mounts: &self.mounts,
             use_logical: &mut self.use_logical,
             is_scanning: self.job.is_some(),
@@ -106,6 +110,20 @@ impl App {
             highlighted_ext: session.selected_ext,
         };
         tree_view::show(ui, &mut session.tree, &view)
+    }
+
+    pub(super) fn show_treemap(&mut self, ui: &mut egui::Ui) -> Option<TreemapEvent> {
+        let session = self.session.as_mut()?;
+        let view = TreemapView {
+            arena: &session.arena,
+            colors: &session.colors,
+            use_logical: self.use_logical,
+            generation: session.generation,
+            highlighted_ext: session.selected_ext,
+            filter: session.tree.filter.as_ref(),
+            selected: session.tree.selected,
+        };
+        treemap::show(ui, &mut session.treemap, &view)
     }
 
     pub(super) fn show_delete_confirmation(&mut self, ctx: &egui::Context) {
