@@ -15,6 +15,7 @@ const STATX_MASK: u32 = libc::STATX_TYPE
     | libc::STATX_INO;
 
 // Layout of `linux_dirent64`: ino (8) + off (8) + reclen (2) + type (1) + NUL-terminated name
+const DIRENT_INO_OFFSET: usize = 0;
 const DIRENT_RECLEN_OFFSET: usize = 16;
 const DIRENT_NAME_OFFSET: usize = 19;
 
@@ -81,11 +82,26 @@ pub fn statx_path(path: &Path) -> io::Result<Metadata> {
     statx_at(libc::AT_FDCWD, &c_path, true)
 }
 
-/// Calls `visit` for every entry except `.` and `..`, reading with `getdents64`.
+/// Whether the block device behind `dev` reports itself as rotational (a spinning HDD).
+///
+/// Devices without a sysfs entry, such as the anonymous ones of btrfs or ZFS, count as
+/// non-rotational.
+#[must_use]
+pub fn is_rotational(dev: u64) -> bool {
+    let device_dir = format!("/sys/dev/block/{}:{}", libc::major(dev), libc::minor(dev));
+    // Partitions have no queue of their own, so their parent disk is consulted instead
+    ["queue/rotational", "../queue/rotational"]
+        .iter()
+        .find_map(|relative| std::fs::read(format!("{device_dir}/{relative}")).ok())
+        .is_some_and(|content| content.first() == Some(&b'1'))
+}
+
+/// Calls `visit` with the inode number and name of every entry except `.` and `..`,
+/// reading with `getdents64`.
 pub fn read_entries(
     dir: BorrowedFd<'_>,
     buffer: &mut [u8],
-    mut visit: impl FnMut(&CStr),
+    mut visit: impl FnMut(u64, &CStr),
 ) -> io::Result<()> {
     loop {
         // SAFETY: the kernel writes at most `buffer.len()` bytes into `buffer`
@@ -111,7 +127,7 @@ pub fn read_entries(
     }
 }
 
-fn visit_records(records: &[u8], visit: &mut impl FnMut(&CStr)) {
+fn visit_records(records: &[u8], visit: &mut impl FnMut(u64, &CStr)) {
     let mut position = 0;
     while position + DIRENT_NAME_OFFSET <= records.len() {
         let reclen_bytes = [
@@ -125,9 +141,42 @@ fn visit_records(records: &[u8], visit: &mut impl FnMut(&CStr)) {
         }
         if let Ok(name) = CStr::from_bytes_until_nul(&records[position + DIRENT_NAME_OFFSET..end]) {
             if name.to_bytes() != b"." && name.to_bytes() != b".." {
-                visit(name);
+                visit(read_ino(&records[position..end]), name);
             }
         }
         position += record_len;
+    }
+}
+
+fn read_ino(record: &[u8]) -> u64 {
+    let mut ino_bytes = [0; 8];
+    ino_bytes.copy_from_slice(&record[DIRENT_INO_OFFSET..DIRENT_INO_OFFSET + 8]);
+    u64::from_ne_bytes(ino_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(ino: u64, name: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0; DIRENT_NAME_OFFSET];
+        bytes[..8].copy_from_slice(&ino.to_ne_bytes());
+        bytes.extend_from_slice(name);
+        bytes.push(0);
+        bytes.resize(bytes.len().next_multiple_of(8), 0);
+        let record_len = u16::try_from(bytes.len()).unwrap();
+        bytes[DIRENT_RECLEN_OFFSET..DIRENT_RECLEN_OFFSET + 2]
+            .copy_from_slice(&record_len.to_ne_bytes());
+        bytes
+    }
+
+    #[test]
+    fn visits_inode_and_name_skipping_dot_entries() {
+        let records = [record(2, b"."), record(1, b".."), record(42, b"file.txt")].concat();
+        let mut visited = Vec::new();
+        visit_records(&records, &mut |ino, name: &CStr| {
+            visited.push((ino, name.to_bytes().to_vec()));
+        });
+        assert_eq!(visited, [(42, b"file.txt".to_vec())]);
     }
 }

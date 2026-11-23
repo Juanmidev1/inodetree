@@ -20,6 +20,7 @@ pub struct App {
     pub(super) path_input: String,
     pub(super) filter_input: String,
     pub(super) mounts: Vec<MountInfo>,
+    pub(super) mounts_sender: Sender<Vec<MountInfo>>,
     pub(super) mounts_receiver: Receiver<Vec<MountInfo>>,
     pub(super) job: Option<ScanJob>,
     pub(super) session: Option<Session>,
@@ -43,6 +44,7 @@ impl App {
                 .unwrap_or_default(),
             filter_input: String::new(),
             mounts: Vec::new(),
+            mounts_sender,
             mounts_receiver,
             job: None,
             session: None,
@@ -53,7 +55,7 @@ impl App {
             action_sender,
             action_receiver,
         };
-        app.load_mounts(mounts_sender);
+        app.load_mounts();
         if initial_path.is_some() {
             app.start_scan();
         }
@@ -109,6 +111,8 @@ impl App {
             _ => {}
         }
         if rescan {
+            // Drives mounted while the app is open only show up in the picker after a reload
+            self.load_mounts();
             self.start_scan();
         }
     }

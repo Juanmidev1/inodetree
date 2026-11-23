@@ -1,22 +1,25 @@
 //! Parallel `getdents64` + `statx` directory walker.
 
 use std::cell::RefCell;
-use std::ffi::OsString;
+use std::ffi::{CString, OsString};
 use std::io;
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
-use rayon::Scope;
+use rayon::{Scope, ThreadPoolBuilder};
 
 use super::sys::{self, Metadata};
 use super::{HardlinkSet, ScanConfig, ScanProgress, ScanResult};
 use crate::arena::{Arena, ChildBatch, NewNode, NodeId, NodeKind, ROOT};
 
 const DIRENT_BUFFER_BYTES: usize = 64 * 1024;
+// More threads than this make a spinning disk's head jump between directories (thrashing),
+// which is slower than a few mostly sequential readers
+const HDD_SCAN_THREADS: usize = 3;
 
 thread_local! {
     static DIRENT_BUFFER: RefCell<Vec<u8>> = RefCell::new(vec![0; DIRENT_BUFFER_BYTES]);
@@ -54,7 +57,7 @@ pub fn scan(config: &ScanConfig) -> io::Result<ScanResult> {
         root_dev: root_meta.dev,
         config,
     };
-    rayon::scope(|scope| scan_dir(scope, &context, &root, ROOT));
+    walk(&context, &root);
     // A poisoned lock still guards a structurally valid arena, since batches are inserted atomically
     let mut arena = context
         .arena
@@ -66,6 +69,22 @@ pub fn scan(config: &ScanConfig) -> io::Result<ScanResult> {
         elapsed: started.elapsed(),
         was_cancelled: config.cancel.load(Relaxed),
     })
+}
+
+fn walk(context: &Context<'_>, root: &Path) {
+    // If the small pool cannot be built the scan still runs, just on the global pool
+    let hdd_pool = sys::is_rotational(context.root_dev)
+        .then(|| {
+            ThreadPoolBuilder::new()
+                .num_threads(HDD_SCAN_THREADS)
+                .build()
+                .ok()
+        })
+        .flatten();
+    match &hdd_pool {
+        Some(pool) => pool.scope(|scope| scan_dir(scope, context, root, ROOT)),
+        None => rayon::scope(|scope| scan_dir(scope, context, root, ROOT)),
+    }
 }
 
 fn scan_dir<'scope>(
@@ -106,15 +125,26 @@ fn read_directory(context: &Context<'_>, path: &Path) -> io::Result<(ChildBatch,
     let dir = sys::open_dir(path)?;
     let mut batch = ChildBatch::default();
     let mut subdirs = Subdirs::new();
+    for (_, name) in collect_entries_by_inode(&dir)? {
+        // Entries that vanish or fail to stat mid-scan are skipped rather than aborting
+        if let Ok(meta) = sys::statx_at(dir.as_raw_fd(), &name, false) {
+            add_entry(context, &mut batch, &mut subdirs, name.to_bytes(), &meta);
+        }
+    }
+    Ok((batch, subdirs))
+}
+
+/// Entries sorted by inode number, so the following `statx` calls read the inode table
+/// (or NTFS MFT) mostly sequentially instead of seeking at random on spinning disks.
+fn collect_entries_by_inode(dir: &OwnedFd) -> io::Result<Vec<(u64, CString)>> {
+    let mut entries = Vec::new();
     DIRENT_BUFFER.with(|buffer| {
-        sys::read_entries(dir.as_fd(), &mut buffer.borrow_mut(), |name| {
-            // Entries that vanish or fail to stat mid-scan are skipped rather than aborting
-            if let Ok(meta) = sys::statx_at(dir.as_raw_fd(), name, false) {
-                add_entry(context, &mut batch, &mut subdirs, name.to_bytes(), &meta);
-            }
+        sys::read_entries(dir.as_fd(), &mut buffer.borrow_mut(), |ino, name| {
+            entries.push((ino, name.to_owned()));
         })
     })?;
-    Ok((batch, subdirs))
+    entries.sort_unstable_by_key(|(ino, _)| *ino);
+    Ok(entries)
 }
 
 fn add_entry(

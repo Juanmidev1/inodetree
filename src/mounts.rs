@@ -4,8 +4,12 @@ use std::ffi::CString;
 use std::io;
 
 const REAL_FILESYSTEMS: &[&str] = &[
-    "ext4", "btrfs", "xfs", "ntfs", "ntfs3", "vfat", "exfat", "zfs", "f2fs",
+    "ext4", "btrfs", "xfs", "ntfs", "ntfs3", "vfat", "exfat", "zfs", "f2fs", "bcachefs", "hfsplus",
+    "cifs", "smb3", "nfs", "nfs4",
 ];
+
+// FUSE drivers that front real storage, unlike virtual ones such as gvfsd-fuse or portals
+const REAL_FUSE_FILESYSTEMS: &[&str] = &["fuse.mergerfs", "fuse.sshfs"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountInfo {
@@ -43,7 +47,7 @@ fn parse_line(line: &str) -> Option<MountInfo> {
     let mut after_fields = after.split(' ');
     let filesystem = after_fields.next()?;
     let device = after_fields.next()?;
-    if !REAL_FILESYSTEMS.contains(&filesystem) {
+    if !is_real_filesystem(filesystem, device) {
         return None;
     }
     Some(MountInfo {
@@ -53,6 +57,13 @@ fn parse_line(line: &str) -> Option<MountInfo> {
         total_bytes: 0,
         free_bytes: 0,
     })
+}
+
+fn is_real_filesystem(filesystem: &str, device: &str) -> bool {
+    // ntfs-3g and exfat-fuse mount as fuseblk, which is real storage only on a block device
+    REAL_FILESYSTEMS.contains(&filesystem)
+        || REAL_FUSE_FILESYSTEMS.contains(&filesystem)
+        || (filesystem == "fuseblk" && device.starts_with("/dev/"))
 }
 
 /// The kernel escapes space, tab, newline and backslash as `\NNN` octal sequences.
@@ -105,7 +116,9 @@ mod tests {
 25 24 0:5 / /proc rw,nosuid shared:2 - proc proc rw
 26 24 0:21 / /run rw shared:3 - tmpfs tmpfs rw
 27 24 259:3 / /mnt/My\\040Disk rw master:4 - ntfs3 /dev/sda1 rw
-28 24 0:30 / /snap/core rw - squashfs /dev/loop0 ro";
+28 24 0:30 / /snap/core rw - squashfs /dev/loop0 ro
+29 24 0:40 / /mnt/windows rw - fuseblk /dev/sdb1 rw
+30 24 0:41 / /run/user/1000/gvfs rw - fuse.gvfsd-fuse gvfsd-fuse rw";
 
     #[test]
     fn keeps_only_real_filesystems() {
@@ -114,7 +127,14 @@ mod tests {
             .iter()
             .map(|mount| mount.mount_point.as_str())
             .collect();
-        assert_eq!(points, ["/", "/mnt/My Disk"]);
+        assert_eq!(points, ["/", "/mnt/My Disk", "/mnt/windows"]);
+    }
+
+    #[test]
+    fn accepts_fuseblk_only_on_block_devices() {
+        assert!(is_real_filesystem("fuseblk", "/dev/sdb1"));
+        assert!(!is_real_filesystem("fuseblk", "some-image"));
+        assert!(!is_real_filesystem("fuse.gvfsd-fuse", "gvfsd-fuse"));
     }
 
     #[test]

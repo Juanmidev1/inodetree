@@ -2,7 +2,6 @@
 
 use std::path::Path;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
@@ -10,14 +9,15 @@ use super::app::App;
 use super::session::Session;
 use crate::actions::{self, DeleteMode};
 use crate::arena::NodeId;
-use crate::mounts::{self, MountInfo};
+use crate::mounts;
 use crate::scan::ScanConfig;
 use crate::scan::job::ScanJob;
 
 const PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 impl App {
-    pub(super) fn load_mounts(&mut self, sender: Sender<Vec<MountInfo>>) {
+    pub(super) fn load_mounts(&mut self) {
+        let sender = self.mounts_sender.clone();
         let repaint = self.context.clone();
         let spawned = thread::Builder::new()
             .name("inodetree-mounts".into())
