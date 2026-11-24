@@ -1,9 +1,10 @@
 # inodetree
 
-A fast, open-source disk space analyzer for Linux, written in Rust. It is inspired by
+A fast, open-source disk space analyzer for Linux and macOS, written in Rust. It is inspired by
 WizTree and is not affiliated with it.
 
-inodetree scans a directory tree with a parallel `getdents64` + `statx` walker, keeps the
+inodetree scans a directory tree with a parallel walker (`getdents64` + `statx` on Linux,
+`readdir` + `fstatat` on macOS), keeps the
 result in a compact arena, and shows it in a native GUI with three views of the same data:
 a size-sorted directory tree, a per-extension breakdown, and an interactive treemap.
 
@@ -19,7 +20,7 @@ a size-sorted directory tree, a per-extension breakdown, and an interactive tree
   (the tree scrolls to the item), double-click zoom and a clickable breadcrumb.
 - Search box (`Ctrl+F`): plain text matches part of a name, `*` and `?` make a glob such as
   `*.iso`.
-- Move to Trash (Freedesktop Trash) or delete permanently, from the context menu or the
+- Move to Trash (Freedesktop Trash on Linux, the Finder Trash on macOS) or delete permanently, from the context menu or the
   keyboard. The scan results update instantly, without rescanning.
 - Allocated size (disk usage) or logical size (file length), switchable at any time.
 - A `--headless` mode that prints a text report, useful for scripts and benchmarks.
@@ -61,6 +62,13 @@ sudo install -Dm644 inodetree-0.1.0-linux-x86_64/assets/inodetree.desktop \
 sudo install -Dm644 inodetree-0.1.0-linux-x86_64/assets/inodetree.svg \
     /usr/local/share/icons/hicolor/scalable/apps/inodetree.svg
 ```
+
+### macOS
+
+There are no pre-built macOS packages yet. Build from source (below). On macOS, scanning
+folders such as `~/Library` needs Full Disk Access for the terminal or app that runs
+inodetree. To scan everything you own, scan `/System/Volumes/Data` rather than `/`, because `/` is
+the read-only system volume.
 
 ### From source
 

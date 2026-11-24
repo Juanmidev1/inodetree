@@ -39,7 +39,7 @@ pub fn scan(config: &ScanConfig) -> io::Result<ScanResult> {
     let started = Instant::now();
     let root = std::fs::canonicalize(&config.root)?;
     let root_meta = sys::statx_path(&root)?;
-    if root_meta.file_type() != libc::S_IFDIR {
+    if root_meta.file_type() != sys::S_IFDIR {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "scan root is not a directory",
@@ -155,9 +155,9 @@ fn add_entry(
     meta: &Metadata,
 ) {
     let kind = match meta.file_type() {
-        libc::S_IFDIR => NodeKind::Directory,
-        libc::S_IFREG => NodeKind::File,
-        libc::S_IFLNK => NodeKind::Symlink,
+        sys::S_IFDIR => NodeKind::Directory,
+        sys::S_IFREG => NodeKind::File,
+        sys::S_IFLNK => NodeKind::Symlink,
         _ => NodeKind::Other,
     };
     let is_duplicate = kind != NodeKind::Directory
