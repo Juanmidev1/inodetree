@@ -1,10 +1,15 @@
-//! Thin wrappers over the raw Linux syscalls used by the scanner.
+//! Unix `getdents64` + `statx` directory reader and metadata helpers.
 
-use std::ffi::{CStr, CString};
+use std::cell::RefCell;
+use std::ffi::{CStr, CString, OsString};
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::path::{Path, PathBuf};
+
+use super::{RootMeta, Subdirs};
+use crate::arena::{ChildBatch, NewNode, NodeKind};
+use crate::scan::HardlinkSet;
 
 const STATX_MASK: u32 = libc::STATX_TYPE
     | libc::STATX_MODE
@@ -18,26 +23,140 @@ const STATX_MASK: u32 = libc::STATX_TYPE
 const DIRENT_INO_OFFSET: usize = 0;
 const DIRENT_RECLEN_OFFSET: usize = 16;
 const DIRENT_NAME_OFFSET: usize = 19;
+const DIRENT_BUFFER_BYTES: usize = 64 * 1024;
+
+thread_local! {
+    static DIRENT_BUFFER: RefCell<Vec<u8>> = RefCell::new(vec![0; DIRENT_BUFFER_BYTES]);
+}
 
 #[derive(Debug, Clone, Copy)]
-pub struct Metadata {
-    pub dev: u64,
-    pub ino: u64,
-    pub nlink: u32,
-    pub mode: u32,
-    pub size: u64,
-    pub blocks: u64,
-    pub mtime_secs: i64,
+struct Metadata {
+    dev: u64,
+    ino: u64,
+    nlink: u32,
+    mode: u32,
+    size: u64,
+    blocks: u64,
+    mtime_secs: i64,
 }
 
 impl Metadata {
-    #[must_use]
-    pub fn file_type(&self) -> u32 {
+    fn file_type(self) -> u32 {
         self.mode & libc::S_IFMT
     }
 }
 
-pub fn open_dir(path: &Path) -> io::Result<OwnedFd> {
+pub fn canonical_root(path: &Path) -> io::Result<PathBuf> {
+    std::fs::canonicalize(path)
+}
+
+pub fn stat_root(path: &Path) -> io::Result<RootMeta> {
+    let root_meta = statx_path(path)?;
+    if root_meta.file_type() != libc::S_IFDIR {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "scan root is not a directory",
+        ));
+    }
+    Ok(RootMeta {
+        dev: root_meta.dev,
+        logical_size: root_meta.size,
+        allocated_size: root_meta.blocks * 512,
+        mtime_secs: root_meta.mtime_secs,
+    })
+}
+
+/// Whether the block device behind `dev` reports itself as rotational (a spinning HDD).
+///
+/// Devices without a sysfs entry, such as the anonymous ones of btrfs or ZFS, count as
+/// non-rotational.
+#[must_use]
+pub fn is_rotational(_root: &Path, dev: u64) -> bool {
+    let device_dir = format!("/sys/dev/block/{}:{}", libc::major(dev), libc::minor(dev));
+    // Partitions have no queue of their own, so their parent disk is consulted instead
+    ["queue/rotational", "../queue/rotational"]
+        .iter()
+        .find_map(|relative| std::fs::read(format!("{device_dir}/{relative}")).ok())
+        .is_some_and(|content| content.first() == Some(&b'1'))
+}
+
+pub fn read_directory(
+    path: &Path,
+    root_dev: u64,
+    hardlinks: &HardlinkSet,
+) -> io::Result<(ChildBatch, Subdirs)> {
+    let dir = open_dir(path)?;
+    let mut batch = ChildBatch::default();
+    let mut subdirs = Subdirs::new();
+    for (_, name) in collect_entries_by_inode(&dir)? {
+        // Entries that vanish or fail to stat mid-scan are skipped rather than aborting
+        if let Ok(meta) = statx_at(dir.as_raw_fd(), &name, false) {
+            add_entry(
+                root_dev,
+                hardlinks,
+                &mut batch,
+                &mut subdirs,
+                name.to_bytes(),
+                &meta,
+            );
+        }
+    }
+    Ok((batch, subdirs))
+}
+
+/// Entries sorted by inode number, so the following `statx` calls read the inode table
+/// (or NTFS MFT) mostly sequentially instead of seeking at random on spinning disks.
+fn collect_entries_by_inode(dir: &OwnedFd) -> io::Result<Vec<(u64, CString)>> {
+    let mut entries = Vec::new();
+    DIRENT_BUFFER.with(|buffer| {
+        read_entries(dir.as_fd(), &mut buffer.borrow_mut(), |ino, name| {
+            entries.push((ino, name.to_owned()));
+        })
+    })?;
+    entries.sort_unstable_by_key(|(ino, _)| *ino);
+    Ok(entries)
+}
+
+fn add_entry(
+    root_dev: u64,
+    hardlinks: &HardlinkSet,
+    batch: &mut ChildBatch,
+    subdirs: &mut Subdirs,
+    raw_name: &[u8],
+    meta: &Metadata,
+) {
+    let kind = match meta.file_type() {
+        libc::S_IFDIR => NodeKind::Directory,
+        libc::S_IFREG => NodeKind::File,
+        libc::S_IFLNK => NodeKind::Symlink,
+        _ => NodeKind::Other,
+    };
+    let is_duplicate = kind != NodeKind::Directory
+        && meta.nlink > 1
+        && !hardlinks.is_first_sighting(meta.dev, meta.ino);
+    let (logical_size, allocated_size) = if is_duplicate {
+        (0, 0)
+    } else {
+        (meta.size, meta.blocks * 512)
+    };
+    let name_start = batch.names.len();
+    batch.names.push_str(&String::from_utf8_lossy(raw_name));
+    // Directories on another device (mount points) stay as empty leaves instead of being entered
+    if kind == NodeKind::Directory && meta.dev == root_dev {
+        subdirs.push((batch.entries.len(), OsString::from_vec(raw_name.to_vec())));
+    }
+    batch.entries.push(NewNode {
+        name_start,
+        name_end: batch.names.len(),
+        kind,
+        logical_size,
+        allocated_size,
+        mtime_secs: meta.mtime_secs,
+        is_hardlink_duplicate: is_duplicate,
+    });
+}
+
+fn open_dir(path: &Path) -> io::Result<OwnedFd> {
     let c_path = CString::new(path.as_os_str().as_bytes())?;
     let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
     // SAFETY: `c_path` is a valid NUL-terminated string for the duration of the call
@@ -50,7 +169,7 @@ pub fn open_dir(path: &Path) -> io::Result<OwnedFd> {
 }
 
 /// `follow_symlinks` is only meant for the scan root. Entries are never followed.
-pub fn statx_at(dirfd: i32, name: &CStr, follow_symlinks: bool) -> io::Result<Metadata> {
+fn statx_at(dirfd: i32, name: &CStr, follow_symlinks: bool) -> io::Result<Metadata> {
     let nofollow = if follow_symlinks {
         0
     } else {
@@ -77,28 +196,14 @@ pub fn statx_at(dirfd: i32, name: &CStr, follow_symlinks: bool) -> io::Result<Me
     })
 }
 
-pub fn statx_path(path: &Path) -> io::Result<Metadata> {
+fn statx_path(path: &Path) -> io::Result<Metadata> {
     let c_path = CString::new(path.as_os_str().as_bytes())?;
     statx_at(libc::AT_FDCWD, &c_path, true)
 }
 
-/// Whether the block device behind `dev` reports itself as rotational (a spinning HDD).
-///
-/// Devices without a sysfs entry, such as the anonymous ones of btrfs or ZFS, count as
-/// non-rotational.
-#[must_use]
-pub fn is_rotational(dev: u64) -> bool {
-    let device_dir = format!("/sys/dev/block/{}:{}", libc::major(dev), libc::minor(dev));
-    // Partitions have no queue of their own, so their parent disk is consulted instead
-    ["queue/rotational", "../queue/rotational"]
-        .iter()
-        .find_map(|relative| std::fs::read(format!("{device_dir}/{relative}")).ok())
-        .is_some_and(|content| content.first() == Some(&b'1'))
-}
-
 /// Calls `visit` with the inode number and name of every entry except `.` and `..`,
 /// reading with `getdents64`.
-pub fn read_entries(
+fn read_entries(
     dir: BorrowedFd<'_>,
     buffer: &mut [u8],
     mut visit: impl FnMut(u64, &CStr),

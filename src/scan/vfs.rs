@@ -1,10 +1,6 @@
-//! Parallel `getdents64` + `statx` directory walker.
+//! Parallel directory walker backed by platform-specific directory readers.
 
-use std::cell::RefCell;
-use std::ffi::{CString, OsString};
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Mutex, PoisonError};
@@ -12,18 +8,13 @@ use std::time::Instant;
 
 use rayon::{Scope, ThreadPoolBuilder};
 
-use super::sys::{self, Metadata};
+use super::sys;
 use super::{HardlinkSet, ScanConfig, ScanProgress, ScanResult};
-use crate::arena::{Arena, ChildBatch, NewNode, NodeId, NodeKind, ROOT};
+use crate::arena::{Arena, ChildBatch, NodeId, NodeKind, ROOT};
 
-const DIRENT_BUFFER_BYTES: usize = 64 * 1024;
 // More threads than this make a spinning disk's head jump between directories (thrashing),
 // which is slower than a few mostly sequential readers
 const HDD_SCAN_THREADS: usize = 3;
-
-thread_local! {
-    static DIRENT_BUFFER: RefCell<Vec<u8>> = RefCell::new(vec![0; DIRENT_BUFFER_BYTES]);
-}
 
 struct Context<'a> {
     arena: Mutex<Arena>,
@@ -32,23 +23,14 @@ struct Context<'a> {
     config: &'a ScanConfig,
 }
 
-/// Subdirectories to descend into: batch index and the raw (possibly non-UTF-8) name.
-type Subdirs = Vec<(usize, OsString)>;
-
 pub fn scan(config: &ScanConfig) -> io::Result<ScanResult> {
     let started = Instant::now();
-    let root = std::fs::canonicalize(&config.root)?;
-    let root_meta = sys::statx_path(&root)?;
-    if root_meta.file_type() != libc::S_IFDIR {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "scan root is not a directory",
-        ));
-    }
+    let root = sys::canonical_root(&config.root)?;
+    let root_meta = sys::stat_root(&root)?;
     let root_arena = Arena::with_root(
         &root.to_string_lossy(),
-        root_meta.size,
-        root_meta.blocks * 512,
+        root_meta.logical_size,
+        root_meta.allocated_size,
         root_meta.mtime_secs,
     );
     let context = Context {
@@ -73,7 +55,7 @@ pub fn scan(config: &ScanConfig) -> io::Result<ScanResult> {
 
 fn walk(context: &Context<'_>, root: &Path) {
     // If the small pool cannot be built the scan still runs, just on the global pool
-    let hdd_pool = sys::is_rotational(context.root_dev)
+    let hdd_pool = sys::is_rotational(root, context.root_dev)
         .then(|| {
             ThreadPoolBuilder::new()
                 .num_threads(HDD_SCAN_THREADS)
@@ -96,10 +78,10 @@ fn scan_dir<'scope>(
     if context.config.cancel.load(Relaxed) {
         return;
     }
-    let (batch, subdirs) = match read_directory(context, path) {
+    let (batch, subdirs) = match sys::read_directory(path, context.root_dev, &context.hardlinks) {
         Ok(result) => result,
         Err(error) => {
-            if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM)) {
+            if error.kind() == io::ErrorKind::PermissionDenied {
                 context
                     .config
                     .progress
@@ -119,70 +101,6 @@ fn scan_dir<'scope>(
         let child_id = first_child + index as NodeId;
         scope.spawn(move |scope| scan_dir(scope, context, &child_path, child_id));
     }
-}
-
-fn read_directory(context: &Context<'_>, path: &Path) -> io::Result<(ChildBatch, Subdirs)> {
-    let dir = sys::open_dir(path)?;
-    let mut batch = ChildBatch::default();
-    let mut subdirs = Subdirs::new();
-    for (_, name) in collect_entries_by_inode(&dir)? {
-        // Entries that vanish or fail to stat mid-scan are skipped rather than aborting
-        if let Ok(meta) = sys::statx_at(dir.as_raw_fd(), &name, false) {
-            add_entry(context, &mut batch, &mut subdirs, name.to_bytes(), &meta);
-        }
-    }
-    Ok((batch, subdirs))
-}
-
-/// Entries sorted by inode number, so the following `statx` calls read the inode table
-/// (or NTFS MFT) mostly sequentially instead of seeking at random on spinning disks.
-fn collect_entries_by_inode(dir: &OwnedFd) -> io::Result<Vec<(u64, CString)>> {
-    let mut entries = Vec::new();
-    DIRENT_BUFFER.with(|buffer| {
-        sys::read_entries(dir.as_fd(), &mut buffer.borrow_mut(), |ino, name| {
-            entries.push((ino, name.to_owned()));
-        })
-    })?;
-    entries.sort_unstable_by_key(|(ino, _)| *ino);
-    Ok(entries)
-}
-
-fn add_entry(
-    context: &Context<'_>,
-    batch: &mut ChildBatch,
-    subdirs: &mut Subdirs,
-    raw_name: &[u8],
-    meta: &Metadata,
-) {
-    let kind = match meta.file_type() {
-        libc::S_IFDIR => NodeKind::Directory,
-        libc::S_IFREG => NodeKind::File,
-        libc::S_IFLNK => NodeKind::Symlink,
-        _ => NodeKind::Other,
-    };
-    let is_duplicate = kind != NodeKind::Directory
-        && meta.nlink > 1
-        && !context.hardlinks.is_first_sighting(meta.dev, meta.ino);
-    let (logical_size, allocated_size) = if is_duplicate {
-        (0, 0)
-    } else {
-        (meta.size, meta.blocks * 512)
-    };
-    let name_start = batch.names.len();
-    batch.names.push_str(&String::from_utf8_lossy(raw_name));
-    // Directories on another device (mount points) stay as empty leaves instead of being entered
-    if kind == NodeKind::Directory && meta.dev == context.root_dev {
-        subdirs.push((batch.entries.len(), OsString::from_vec(raw_name.to_vec())));
-    }
-    batch.entries.push(NewNode {
-        name_start,
-        name_end: batch.names.len(),
-        kind,
-        logical_size,
-        allocated_size,
-        mtime_secs: meta.mtime_secs,
-        is_hardlink_duplicate: is_duplicate,
-    });
 }
 
 fn record_progress(progress: &ScanProgress, batch: &ChildBatch) {
