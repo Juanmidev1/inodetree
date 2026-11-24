@@ -1,12 +1,21 @@
 //! User actions on scanned entries. Disk operations never run on the UI thread.
 
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::thread;
 
 use crate::arena::{Arena, NodeId, ROOT};
+
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+use unix as platform;
+
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows as platform;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteMode {
@@ -30,22 +39,13 @@ pub fn target_path(arena: &Arena, id: NodeId) -> io::Result<PathBuf> {
     }
     // Lossy names from non-UTF-8 entries rebuild a path that does not exist, so nothing is touched
     let path = PathBuf::from(arena.path_of(id));
-    if is_mount_point(&path)? {
+    if platform::is_mount_point(&path)? {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "refusing to delete a mount point: its contents were not scanned",
         ));
     }
     Ok(path)
-}
-
-/// The scanner shows other filesystems as empty folders, so deleting one would wipe unseen data.
-fn is_mount_point(path: &Path) -> io::Result<bool> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    let Some(parent) = path.parent().filter(|_| metadata.is_dir()) else {
-        return Ok(false);
-    };
-    Ok(std::fs::symlink_metadata(parent)?.dev() != metadata.dev())
 }
 
 pub fn open_in_file_manager(path: &Path) -> io::Result<()> {
@@ -62,16 +62,9 @@ pub fn open_in_file_manager(path: &Path) -> io::Result<()> {
 pub fn delete_path(path: &Path, mode: DeleteMode) -> Result<(), String> {
     match mode {
         DeleteMode::Trash => trash::delete(path).map_err(|error| error.to_string()),
-        DeleteMode::Permanent => remove_permanently(path).map_err(|error| error.to_string()),
-    }
-}
-
-fn remove_permanently(path: &Path) -> io::Result<()> {
-    // `symlink_metadata` keeps a symlink to a directory from being treated as the directory
-    if std::fs::symlink_metadata(path)?.is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
+        DeleteMode::Permanent => {
+            platform::remove_permanently(path).map_err(|error| error.to_string())
+        }
     }
 }
 

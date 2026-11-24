@@ -3,6 +3,8 @@
 use std::ffi::CString;
 use std::io;
 
+use super::MountInfo;
+
 const REAL_FILESYSTEMS: &[&str] = &[
     "ext4", "btrfs", "xfs", "ntfs", "ntfs3", "vfat", "exfat", "zfs", "f2fs", "bcachefs", "hfsplus",
     "cifs", "smb3", "nfs", "nfs4",
@@ -10,15 +12,6 @@ const REAL_FILESYSTEMS: &[&str] = &[
 
 // FUSE drivers that front real storage, unlike virtual ones such as gvfsd-fuse or portals
 const REAL_FUSE_FILESYSTEMS: &[&str] = &["fuse.mergerfs", "fuse.sshfs"];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MountInfo {
-    pub device: String,
-    pub mount_point: String,
-    pub filesystem: String,
-    pub total_bytes: u64,
-    pub free_bytes: u64,
-}
 
 /// Lists mounted real filesystems with their capacity.
 pub fn list_mounts() -> io::Result<Vec<MountInfo>> {

@@ -94,8 +94,16 @@ impl App {
             .as_ref()
             .and_then(|session| session.tree.selected);
         let (permanent, trash, copy, rescan) = ctx.input_mut(|input| {
+            // `egui-winit` translates Shift+Delete on Windows into `Event::Cut` without a Delete key event.
+            let shift_delete_cut = cfg!(windows)
+                && input.modifiers.shift
+                && !input.modifiers.command
+                && input.events.iter().any(|event| matches!(event, Event::Cut));
+            if shift_delete_cut {
+                input.events.retain(|event| !matches!(event, Event::Cut));
+            }
             (
-                input.consume_key(Modifiers::SHIFT, Key::Delete),
+                input.consume_key(Modifiers::SHIFT, Key::Delete) || shift_delete_cut,
                 input.consume_key(Modifiers::NONE, Key::Delete),
                 input
                     .events
