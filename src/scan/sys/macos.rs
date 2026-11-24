@@ -72,7 +72,7 @@ pub fn statx_path(path: &Path) -> io::Result<Metadata> {
     statx_at(libc::AT_FDCWD, &c_path, true)
 }
 
-/// Every Mac ships with flash storage.
+/// Rotational detection is not implemented on macOS yet, so every device uses the full thread pool.
 #[must_use]
 pub fn is_rotational(_dev: u64) -> bool {
     false
@@ -99,10 +99,19 @@ pub fn read_entries(
         return Err(error);
     }
     loop {
+        // SAFETY: `__error` points at this thread's errno; `readdir` only sets it on failure
+        unsafe { *libc::__error() = 0 };
         // SAFETY: `stream` is a valid open directory stream
         let entry = unsafe { libc::readdir(stream) };
         if entry.is_null() {
-            break;
+            // NULL means either the end of the stream (errno stays 0) or an I/O error
+            let error = io::Error::last_os_error();
+            // SAFETY: `stream` is open and not used afterwards
+            unsafe { libc::closedir(stream) };
+            return match error.raw_os_error() {
+                Some(0) => Ok(()),
+                _ => Err(error),
+            };
         }
         // SAFETY: `readdir` returned a valid entry whose name is NUL-terminated
         let (ino, name) = unsafe { ((*entry).d_ino, CStr::from_ptr((*entry).d_name.as_ptr())) };
@@ -110,7 +119,4 @@ pub fn read_entries(
             visit(ino, name);
         }
     }
-    // SAFETY: `stream` is open and not used afterwards
-    unsafe { libc::closedir(stream) };
-    Ok(())
 }
