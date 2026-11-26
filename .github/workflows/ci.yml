@@ -34,6 +34,23 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
 
+  check-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: check-macos-${{ hashFiles('Cargo.lock') }}
+          restore-keys: check-macos-
+      - run: rustup component add clippy
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+
   # Built inside AlmaLinux 9 so the binary links against glibc 2.34 and installs on RHEL 9 and newer
   package:
     if: startsWith(github.ref, 'refs/tags/v')

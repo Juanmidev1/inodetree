@@ -10,7 +10,7 @@ use inodetree::scan::{ScanConfig, ScanResult, vfs};
 use inodetree::stats;
 
 #[derive(Parser)]
-#[command(version, about = "Fast Linux disk space analyzer")]
+#[command(version, about = "Fast disk space analyzer for Linux and macOS")]
 struct Cli {
     /// Directory to scan
     path: Option<PathBuf>,

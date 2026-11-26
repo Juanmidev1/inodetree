@@ -19,6 +19,10 @@ const DIRENT_INO_OFFSET: usize = 0;
 const DIRENT_RECLEN_OFFSET: usize = 16;
 const DIRENT_NAME_OFFSET: usize = 19;
 
+pub const S_IFDIR: u32 = libc::S_IFDIR;
+pub const S_IFREG: u32 = libc::S_IFREG;
+pub const S_IFLNK: u32 = libc::S_IFLNK;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Metadata {
     pub dev: u64,
