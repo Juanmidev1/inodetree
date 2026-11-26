@@ -1,7 +1,7 @@
 # inodetree
 
-A fast, open-source disk space analyzer for Linux and macOS, written in Rust. It is inspired by
-WizTree and is not affiliated with it.
+A fast, open-source disk space analyzer for Linux, written in Rust, with a community port to
+macOS. It is inspired by WizTree and is not affiliated with it.
 
 inodetree scans a directory tree with a parallel walker (`getdents64` + `statx` on Linux,
 `readdir` + `fstatat` on macOS), keeps the
@@ -63,16 +63,30 @@ sudo install -Dm644 inodetree-0.1.0-linux-x86_64/assets/inodetree.svg \
     /usr/local/share/icons/hicolor/scalable/apps/inodetree.svg
 ```
 
-### macOS
+### macOS (community port, not officially supported)
 
-There are no pre-built macOS packages yet. Build from source (below). On macOS, scanning
-folders such as `~/Library` needs Full Disk Access for the terminal or app that runs
-inodetree. To scan everything you own, scan `/System/Volumes/Data` rather than `/`, because `/` is
-the read-only system volume.
+The macOS port was written by a contributor who wanted to share it with the project
+([#1](https://github.com/Juanmidev1/inodetree/pull/1)). It is not officially supported: the
+maintainer does not use macOS, so the port is only checked by the automated build and tests in
+CI. macOS users are welcome to maintain it, and issues and pull requests that improve it are
+appreciated.
+
+There are no pre-built macOS packages. Build from source (below). Some things work differently
+on macOS:
+
+- Scanning folders such as `~/Library` needs Full Disk Access for the terminal or app that runs
+  inodetree.
+- To scan everything you own, scan `/System/Volumes/Data` rather than `/`, because `/` is the
+  read-only system volume.
+- APFS clones (for example, files duplicated in Finder) share their blocks on disk but are
+  counted in full, so totals can be larger than what Finder shows. `du` counts them the same way.
+- Move to Trash asks Finder to do it, so the first time macOS may ask you to let inodetree (or
+  your terminal) control Finder. If you deny it, the move fails and nothing is deleted.
 
 ### From source
 
-You need Rust 1.85 or newer and a C linker. No `-devel` packages are required.
+You need Rust 1.85 or newer and a C linker. On macOS, the linker comes with the Xcode Command
+Line Tools (`xcode-select --install`). No `-devel` packages are required.
 
 ```sh
 git clone https://github.com/Juanmidev1/inodetree.git
@@ -81,7 +95,7 @@ cargo build --release
 ./target/release/inodetree
 ```
 
-## Runtime requirements
+## Runtime requirements (Linux)
 
 The GUI needs an OpenGL stack and a keyboard library, which every desktop distribution
 already ships: `libEGL.so.1` and `libxkbcommon.so.0` (the RPM requires both). It runs on
@@ -104,6 +118,9 @@ inodetree --headless /var --top 20 --logical
 | `Shift+Delete` | Delete the selected item permanently (asks for confirmation) |
 | `Ctrl+C` | Copy the selected item's full path |
 
+On macOS, use `Cmd` instead of `Ctrl`. On Mac laptops, `Delete` in the table is forward delete,
+so press `Fn+Delete` (or `Fn+Shift+Delete`), and `F5` may also need `Fn`.
+
 Right-click a row in the tree or a block in the treemap for the same context menu.
 The scan root and mount points inside the scan cannot be deleted from the app.
 
@@ -111,7 +128,7 @@ Without root, directories you cannot read are skipped and counted in the status 
 scan of `/` reports less than `df`. Run it with the privileges you need for the folder you
 want to analyze.
 
-## Troubleshooting
+## Troubleshooting (Linux)
 
 - **The window does not open and the terminal mentions EGL, GL or xkbcommon:** install the
   missing libraries. On Fedora and RHEL: `sudo dnf install libglvnd-egl libxkbcommon`.
