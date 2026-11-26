@@ -38,7 +38,7 @@ type Subdirs = Vec<(usize, OsString)>;
 pub fn scan(config: &ScanConfig) -> io::Result<ScanResult> {
     let started = Instant::now();
     let root = std::fs::canonicalize(&config.root)?;
-    let root_meta = sys::statx_path(&root)?;
+    let root_meta = sys::stat_path(&root)?;
     if root_meta.file_type() != sys::S_IFDIR {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -127,7 +127,7 @@ fn read_directory(context: &Context<'_>, path: &Path) -> io::Result<(ChildBatch,
     let mut subdirs = Subdirs::new();
     for (_, name) in collect_entries_by_inode(&dir)? {
         // Entries that vanish or fail to stat mid-scan are skipped rather than aborting
-        if let Ok(meta) = sys::statx_at(dir.as_raw_fd(), &name, false) {
+        if let Ok(meta) = sys::stat_at(dir.as_raw_fd(), &name, false) {
             add_entry(context, &mut batch, &mut subdirs, name.to_bytes(), &meta);
         }
     }
