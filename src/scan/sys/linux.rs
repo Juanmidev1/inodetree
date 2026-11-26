@@ -1,10 +1,10 @@
 //! Thin wrappers over the raw Linux syscalls used by the scanner.
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::os::fd::{AsRawFd, BorrowedFd};
+
+use super::Metadata;
 
 const STATX_MASK: u32 = libc::STATX_TYPE
     | libc::STATX_MODE
@@ -22,39 +22,10 @@ const DIRENT_NAME_OFFSET: usize = 19;
 pub const S_IFDIR: u32 = libc::S_IFDIR;
 pub const S_IFREG: u32 = libc::S_IFREG;
 pub const S_IFLNK: u32 = libc::S_IFLNK;
-
-#[derive(Debug, Clone, Copy)]
-pub struct Metadata {
-    pub dev: u64,
-    pub ino: u64,
-    pub nlink: u32,
-    pub mode: u32,
-    pub size: u64,
-    pub blocks: u64,
-    pub mtime_secs: i64,
-}
-
-impl Metadata {
-    #[must_use]
-    pub fn file_type(&self) -> u32 {
-        self.mode & libc::S_IFMT
-    }
-}
-
-pub fn open_dir(path: &Path) -> io::Result<OwnedFd> {
-    let c_path = CString::new(path.as_os_str().as_bytes())?;
-    let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    // SAFETY: `c_path` is a valid NUL-terminated string for the duration of the call
-    let fd = unsafe { libc::open(c_path.as_ptr(), flags) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: `open` just returned this descriptor and nothing else owns it
-    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
-}
+pub const S_IFMT: u32 = libc::S_IFMT;
 
 /// `follow_symlinks` is only meant for the scan root. Entries are never followed.
-pub fn statx_at(dirfd: i32, name: &CStr, follow_symlinks: bool) -> io::Result<Metadata> {
+pub fn stat_at(dirfd: i32, name: &CStr, follow_symlinks: bool) -> io::Result<Metadata> {
     let nofollow = if follow_symlinks {
         0
     } else {
@@ -79,11 +50,6 @@ pub fn statx_at(dirfd: i32, name: &CStr, follow_symlinks: bool) -> io::Result<Me
         blocks: raw.stx_blocks,
         mtime_secs: raw.stx_mtime.tv_sec,
     })
-}
-
-pub fn statx_path(path: &Path) -> io::Result<Metadata> {
-    let c_path = CString::new(path.as_os_str().as_bytes())?;
-    statx_at(libc::AT_FDCWD, &c_path, true)
 }
 
 /// Whether the block device behind `dev` reports itself as rotational (a spinning HDD).
